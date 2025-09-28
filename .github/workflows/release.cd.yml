@@ -1,0 +1,39 @@
+name: CD | Release deployment | remote ssh
+
+on:
+  workflow_run:
+    workflows: ['CI | Publish npm package']
+    types:
+      - completed
+
+jobs:
+  after-publish:
+    if: github.repository == 'underpostnet/pwa-microservices-template' || startsWith(github.event.head_commit.message, 'cd(ssh-release)')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run remote deploy via SSH
+        uses: appleboy/ssh-action@v1.2.2
+        with:
+          # Remote host (secret)
+          host: ${{ secrets.SSH_HOST }}
+          # Remote user (secret)
+          username: ${{ secrets.SSH_USERNAME }}
+          # Private key (secret) — the PEM contents (not a path)
+          key: ${{ secrets.SSH_PRIV_KEY }}
+          # Remote port (optional)
+          port: ${{ secrets.SSH_PORT }}
+          # Optional: if your private key has a passphrase, add:
+          # passphrase: ${{ secrets.SSH_KEY_PASSPHRASE }}
+          # Commands to run on the remote VM
+          script: |
+            set -e
+            echo "Starting remote release deploy"
+            cd /home/dd/engine
+            npm install -g underpost
+            underpost config set GITHUB_TOKEN ${{ secrets.GITHUB_TOKEN }}
+            node bin run --dev pull
+            underpost run secret
+            underpost run underpost-config
+            underpost run ssh-deploy engine-core
+            underpost run ssh-deploy engine-lampp
+            underpost run ssh-deploy engine-cyberia
