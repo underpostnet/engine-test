@@ -91,10 +91,10 @@ const DefaultConf = /**/ {
         { path: '/docs', client: 'Default', ssr: 'Default' },
         { path: '/recover', client: 'Default', ssr: 'Default' },
         { path: '/default-management', client: 'Default', ssr: 'Default' },
+        { path: '/chat', client: 'Default', ssr: 'Default' },
+        { path: '/blog', client: 'Default', ssr: 'Default' },
         { client: 'Default', ssr: 'Default', path: '/404', title: '404 Not Found' },
         { client: 'Default', ssr: 'Default', path: '/500', title: '500 Server Error' },
-        { path: '/blog', client: 'Default', ssr: 'Default' },
-        { path: '/chat', client: 'Default', ssr: 'Default' },
       ],
       dists: [
         {
@@ -111,19 +111,6 @@ const DefaultConf = /**/ {
           import_name_build: '/dist/sortablejs/sortable.complete.esm.js',
         },
         { folder: './node_modules/validator', public_folder: '/dist/validator' },
-        { folder: './node_modules/easymde/dist', public_folder: '/dist/easymde' },
-        {
-          folder: './node_modules/marked/lib',
-          public_folder: '/dist/marked',
-          import_name: 'marked',
-          import_name_build: '/dist/marked/marked.esm.js',
-        },
-        {
-          folder: './node_modules/vanilla-jsoneditor/standalone.js',
-          public_folder: '/dist/vanilla-jsoneditor/standalone.js',
-          import_name: 'vanilla-jsoneditor',
-          import_name_build: '/dist/vanilla-jsoneditor/standalone.js',
-        },
         {
           import_name: 'ag-grid-community',
           import_name_build: '/dist/ag-grid-community/ag-grid-community.min.js',
@@ -139,6 +126,19 @@ const DefaultConf = /**/ {
           import_name_build: '/dist/socket.io/socket.io.esm.min.js',
         },
         { folder: './node_modules/peerjs/dist', public_folder: '/dist/peerjs' },
+        { folder: './node_modules/easymde/dist', public_folder: '/dist/easymde' },
+        {
+          folder: './node_modules/marked/lib',
+          public_folder: '/dist/marked',
+          import_name: 'marked',
+          import_name_build: '/dist/marked/marked.esm.js',
+        },
+        {
+          folder: './node_modules/vanilla-jsoneditor/standalone.js',
+          public_folder: '/dist/vanilla-jsoneditor/standalone.js',
+          import_name: 'vanilla-jsoneditor',
+          import_name_build: '/dist/vanilla-jsoneditor/standalone.js',
+        },
       ],
       services: ['default', 'core', 'user', 'test', 'file', 'document'],
     },
@@ -156,12 +156,12 @@ const DefaultConf = /**/ {
     },
   },
   server: {
-    'default.net': {
+    'test.nexodev.org': {
       '/': {
         client: 'default',
         runtime: 'nodejs',
-        apis: ['default', 'core', 'user', 'test', 'file', 'document'],
-        origins: [],
+        apis: ['default', 'core', 'user', 'test', 'file'],
+        origins: ['https://stagging.nexodev.org'],
         minifyBuild: false,
         iconsBuild: false,
         liteBuild: true,
@@ -183,15 +183,33 @@ const DefaultConf = /**/ {
         valkey: { port: 6379, host: '127.0.0.1' },
       },
     },
-    'www.default.net': {
+    'stagging.nexodev.org': {
       '/': {
-        client: null,
+        client: 'default',
         runtime: 'nodejs',
-        apis: [],
+        apis: ['default', 'core', 'user', 'test', 'file'],
         origins: [],
+        apiBaseProxyPath: '/',
+        apiBaseHost: 'test.nexodev.org',
         minifyBuild: false,
+        iconsBuild: false,
         liteBuild: true,
+        docsBuild: false,
+        offlineBuild: false,
+        ws: 'core',
+        peer: true,
         proxy: [80, 443],
+        db: { provider: 'mongoose', host: 'mongodb://127.0.0.1:27017', name: 'default' },
+        mailer: {
+          sender: { email: 'noreply@default.net', name: 'Default' },
+          transport: {
+            host: 'smtp.default.com',
+            port: 465,
+            secure: true,
+            auth: { user: 'noreply@default.net', pass: '' },
+          },
+        },
+        valkey: { port: 6379, host: '127.0.0.1' },
       },
     },
   },
