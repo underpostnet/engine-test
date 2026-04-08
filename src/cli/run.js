@@ -451,6 +451,27 @@ class UnderpostRun {
     },
 
     /**
+     * @method template-deploy-local
+     * @description Similar to `template-deploy` but runs the workflow locally without dispatching GitHub Actions. It pulls the latest changes, pushes to GitHub, builds the template, and optionally triggers a local release with CI push.
+     * @param {string} path - The deployment path identifier (e.g., 'sync-engine-core', 'init-engine-core', or empty for build-only).
+     * @param {Object} options - The default underpost runner options for customizing workflow
+     * @memberof UnderpostRun
+     */
+    'template-deploy-local': (path, options = DEFAULT_OPTION) => {
+      const baseCommand = options.dev ? 'node bin' : 'underpost';
+      shellExec(`npm run security:secrets`);
+      const reportPath = './gitleaks-report.json';
+      if (fs.existsSync(reportPath) && JSON.parse(fs.readFileSync(reportPath, 'utf8')).length > 0) {
+        logger.error('Secrets detected in gitleaks-report.json, aborting template-deploy');
+        return;
+      }
+      shellExec(`${baseCommand} run pull`);
+      shellExec(`${baseCommand} push engine-private ${process.env.GITHUB_USERNAME}/engine-private`);
+      shellExec(`${baseCommand} push . ${process.env.GITHUB_USERNAME}/engine`);
+      if (path) shellExec(`${baseCommand} release --ci-push ${path}`);
+      else shellExec(`${baseCommand} release --pwa-build`);
+    },
+    /**
      * @method template-deploy-image
      * @description Dispatches the Docker image CI workflow for the `engine` repository.
      * @param {string} path - The input value, identifier, or path for the operation.
@@ -874,6 +895,7 @@ echo -e "[code]\nname=Visual Studio Code\nbaseurl=https://packages.microsoft.com
       const confInstances = JSON.parse(
         fs.readFileSync(`./engine-private/conf/${deployId}/conf.instances.json`, 'utf8'),
       );
+      let promotedTraffic = '';
       for (const instance of confInstances) {
         let {
           id: _id,
@@ -893,6 +915,7 @@ echo -e "[code]\nname=Visual Studio Code\nbaseurl=https://packages.microsoft.com
           namespace: options.namespace,
         });
         const targetTraffic = currentTraffic ? (currentTraffic === 'blue' ? 'green' : 'blue') : 'blue';
+        promotedTraffic = targetTraffic;
         let proxyYaml =
           Underpost.deploy.baseProxyYamlFactory({ host: _host, env: options.tls ? 'production' : env, options }) +
           Underpost.deploy.deploymentYamlServiceFactory({
@@ -917,6 +940,18 @@ EOF
 `,
           { disableLog: true },
         );
+      }
+      // Refresh the gRPC service to ensure it points to the parent deploy's current traffic.
+      if (promotedTraffic) {
+        const parentTraffic = Underpost.deploy.getCurrentTraffic(deployId, { namespace: options.namespace }) || 'blue';
+        const grpcServicePath = Underpost.deploy.buildGrpcServiceManifest({
+          deployId,
+          env,
+          confServer: loadConfServerJson(`./engine-private/conf/${deployId}/conf.server.json`),
+          namespace: options.namespace,
+          traffic: [parentTraffic],
+        });
+        if (grpcServicePath) shellExec(`kubectl apply -f ${grpcServicePath} -n ${options.namespace}`);
       }
     },
 
@@ -971,7 +1006,7 @@ EOF
 
         const targetTraffic = currentTraffic ? (currentTraffic === 'blue' ? 'green' : 'blue') : 'blue';
         const podId = `${_deployId}-${env}-${targetTraffic}`;
-        const ignorePods = Underpost.deploy.get(podId, 'pods', options.namespace).map((p) => p.NAME);
+        const ignorePods = Underpost.kubectl.get(podId, 'pods', options.namespace).map((p) => p.NAME);
         Underpost.deploy.configMap(env, options.namespace);
         shellExec(`kubectl delete service ${podId}-service --namespace ${options.namespace} --ignore-not-found`);
         shellExec(`kubectl delete deployment ${podId} --namespace ${options.namespace} --ignore-not-found`);
@@ -986,6 +1021,27 @@ EOF
               clusterContext: options.k3s ? 'k3s' : options.kubeadm ? 'kubeadm' : 'kind',
               gitClean: options.gitClean || false,
             });
+        // Regenerate the parent deploy's gRPC ClusterIP service pointing to the
+        // parent's current traffic colour and apply it before the instance pod starts so
+        // DNS is resolvable the moment the pod boots.
+        const parentTraffic = Underpost.deploy.getCurrentTraffic(deployId, { namespace: options.namespace }) || 'blue';
+        const grpcServicePath = Underpost.deploy.buildGrpcServiceManifest({
+          deployId,
+          env,
+          confServer: loadConfServerJson(`./engine-private/conf/${deployId}/conf.server.json`),
+          namespace: options.namespace,
+          traffic: [targetTraffic],
+          host: _host,
+        });
+        if (grpcServicePath) shellExec(`kubectl apply -f ${grpcServicePath} -n ${options.namespace}`);
+
+        const resolvedCmd = _cmd[env].map((c) =>
+          c.replaceAll(
+            '{{grpc-service-dns}}',
+            `${deployId}-grpc-service-${env}-${parentTraffic}.${options.namespace || 'default'}.svc.cluster.local:50051`,
+          ),
+        );
+
         let deploymentYaml = `---
 ${Underpost.deploy
   .deploymentYamlPartsFactory({
@@ -997,7 +1053,7 @@ ${Underpost.deploy
     image: _image,
     namespace: options.namespace,
     volumes: _volumes,
-    cmd: _cmd[env],
+    cmd: resolvedCmd,
   })
   .replace('{{ports}}', buildKindPorts(_fromPort, _toPort))}
 `;
@@ -1043,7 +1099,7 @@ EOF
      * @memberof UnderpostRun
      */
     'ls-deployments': async (path, options = DEFAULT_OPTION) => {
-      console.table(await Underpost.deploy.get(path, 'deployments', options.namespace));
+      console.table(await Underpost.kubectl.get(path, 'deployments', options.namespace));
     },
 
     /**
@@ -1737,7 +1793,7 @@ EOF
 
               const { close } = await (async () => {
                 const checkAwaitPath = '/await';
-                while (!Underpost.deploy.existsContainerFile({ podName, path: checkAwaitPath })) {
+                while (!Underpost.kubectl.existsFile({ podName, path: checkAwaitPath })) {
                   logger.info('monitor', checkAwaitPath);
                   await timer(1000);
                 }
@@ -1764,7 +1820,7 @@ EOF
                 logger.info('monitor', checkPath);
                 {
                   const checkAwaitPath = `/home/dd/docs${checkPath}`;
-                  while (!Underpost.deploy.existsContainerFile({ podName, path: checkAwaitPath })) {
+                  while (!Underpost.kubectl.existsFile({ podName, path: checkAwaitPath })) {
                     logger.info('waiting for', checkAwaitPath);
                     await timer(1000);
                   }
