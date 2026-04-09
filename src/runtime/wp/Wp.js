@@ -244,47 +244,74 @@ class WpService {
     // Step 2 — install and activate Wordfence Security
     logger.info(`${host}: installing Wordfence security plugin`);
     wpCli(`plugin install wordfence --activate`);
+    wpCli(`plugin install all-in-one-wp-security-and-firewall --activate`);
+    wpCli(`plugin install sucuri-scanner --activate`);
+    wpCli(`plugin install cleantalk-spam-protect --activate`);
 
     // Step 3 — enable auto-updates for the plugin
     wpCli(`plugin auto-updates enable wordfence`);
+    wpCli(`plugin auto-updates enable all-in-one-wp-security-and-firewall`);
+    wpCli(`plugin auto-updates enable sucuri-scanner`);
+    wpCli(`plugin auto-updates enable cleantalk-spam-protect`);
 
     logger.info(`${host}: WP-CLI provisioning complete`, { siteUrl, adminUser, adminEmail });
   }
 
   /**
-   * Writes a .htaccess file at the vhost document root that rewrites all
-   * requests to a WordPress subdirectory (Method I — without URL change).
+   * Appends rewrite rules for a WordPress subdirectory to the root .htaccess.
+   * Each subdirectory gets its own scoped RewriteRule block so multiple
+   * WordPress installs under the same host do not overwrite each other.
    * @param {{ vhostDir: string, subDir: string }} opts
    */
   static ensureSubdirHtaccess({ vhostDir, subDir }) {
     if (!fs.existsSync(vhostDir)) fs.mkdirSync(vhostDir, { recursive: true });
     const htaccessPath = path.join(vhostDir, '.htaccess');
-    const content = `<IfModule mod_rewrite.c>
-RewriteEngine on
-RewriteCond %{REQUEST_URI} !^\/${subDir}\/
+
+    // Marker comments to identify each subDir block
+    const marker = `# -- wp-subdir: ${subDir} --`;
+    const block = `${marker}
+RewriteCond %{REQUEST_URI} ^\\/${subDir}(\\/|$) [NC]
 RewriteCond %{REQUEST_FILENAME} !-f
 RewriteCond %{REQUEST_FILENAME} !-d
-RewriteRule ^(.*)$ \/${subDir}\/$1
-RewriteRule ^(\/)?$ \/${subDir}\/index.php [L]
-<\/IfModule>
-`;
-    fs.writeFileSync(htaccessPath, content, 'utf8');
-    logger.info(`subdirectory .htaccess written`, { vhostDir, subDir });
+RewriteRule ^${subDir}\\/?(.*)?$ \\/${subDir}\\/index.php [L]
+${marker} end`;
+
+    let existing = '';
+    if (fs.existsSync(htaccessPath)) {
+      existing = fs.readFileSync(htaccessPath, 'utf8');
+    }
+
+    // If this subDir block already exists, replace it; otherwise append
+    const markerRegex = new RegExp(
+      `${marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}[\\s\\S]*?${marker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} end`,
+    );
+
+    if (markerRegex.test(existing)) {
+      existing = existing.replace(markerRegex, block);
+    } else {
+      // Ensure the RewriteEngine directive and IfModule wrapper exist
+      if (!existing.includes('RewriteEngine on')) {
+        existing = `<IfModule mod_rewrite.c>\nRewriteEngine on\n\n</IfModule>\n`;
+      }
+      // Insert the new block before the closing </IfModule>
+      existing = existing.replace('</IfModule>', `${block}\n</IfModule>`);
+    }
+
+    fs.writeFileSync(htaccessPath, existing, 'utf8');
+    logger.info(`subdirectory .htaccess updated`, { vhostDir, subDir });
   }
 
   /**
-   * Creates a MariaDB database and user if they do not already exist.
+   * Drops and recreates a MariaDB database to ensure a clean state for fresh installs.
    * @param {{ host: string, name: string, user: string, password: string }} db
    */
   static createDatabase({ host, name, user, password }) {
-    logger.info(`Creating database "${name}" on ${host} if not exists`);
-    // Use the LAMPP bundled mysql client
+    logger.info(`Dropping and recreating database "${name}" on ${host}`);
     const mysql = `/opt/lampp/bin/mysql`;
     const q = (s) => s.replace(/'/g, "\\'");
-    shellExec(
-      `${mysql} -h '${host}' -u '${q(user)}' -p'${q(password)}' -e ` +
-        `"CREATE DATABASE IF NOT EXISTS \\\`${q(name)}\\\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"`,
-    );
+    const exec = (sql) => shellExec(`${mysql} -h '${host}' -u '${q(user)}' -p'${q(password)}' -e "${sql}"`);
+    exec(`DROP DATABASE IF EXISTS \\\`${q(name)}\\\``);
+    exec(`CREATE DATABASE \\\`${q(name)}\\\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
   }
 
   /**
