@@ -67,6 +67,7 @@ const DefaultConf = /**/ {
           'windowGetDimensions',
           'EventBus',
           'ClientEvents',
+          'Repository',
         ],
         default: [
           'AppShellDefault',
