@@ -2,28 +2,39 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$SCRIPT_DIR/../lib/logging.sh"
+source "$SCRIPT_DIR/../lib/github-actions-logging.sh"
+source "$SCRIPT_DIR/../lib/host.sh"
 
 ENGINE_ROOT=/home/dd/engine
 INGRESS_NODE=localhost.localdomain
 TARGET_NODE=hp-envy-iso-ram-rocky9
 
-main() {
-    echo "Starting remote sync and deploy"
-    
-    # No pull: this flow deploys the tree already on the node.
-    run_quiet "Install dependencies" "Target pod:" 14 \
-        sudo -n -- /bin/bash -lc "cd $ENGINE_ROOT && npm install"
+# Base source the pod bootstraps from. `pod_bootstrap_cmd` derives its checkout directory from
+# this name, so the repository is stated once and can be repointed without touching the command.
+POD_SRC_REPO="${POD_SRC_REPO:-underpostnet/engine-test-test}"
 
-    run_quiet "Load host config" "Target pod:" 14 \
-        sudo -n -- /bin/bash -lc "cd $ENGINE_ROOT && node bin host load"
+main() {
+    deploy_start "Starting remote sync and deploy"
     
-    run_quiet \
-    "Sync dd-test cluster" \
-    "Target pod:" \
-    14 \
-    sudo -n -- /bin/bash -lc \
-    "cd $ENGINE_ROOT && node bin run sync --kubeadm --gateway-api --ingress-node ${INGRESS_NODE} --node-name ${TARGET_NODE} --deploy-id-cron-jobs none --timeout-response 300000ms --cmd 'underpost start --build --run dd-test production' dd-test,1,,underpost/wp:v3.3.0"
+    prepare_host "$ENGINE_ROOT"
+    
+    local pod_cmd
+    pod_cmd="$(pod_bootstrap_cmd dd-test production "$POD_SRC_REPO"), underpost start dd-test production --build --run --skip-pull-repo-base"
+
+    deploy_step "Sync dd-test cluster" \
+        sudo -n -- /bin/bash -lc \
+        "cd $ENGINE_ROOT && node bin run sync \
+          --deploy-id dd-test \
+          --replicas 1 \
+          --image underpost/wp:v3.3.0 \
+          --kubeadm \
+          --deploy-id-cron-jobs none \
+          --timeout-response 300000ms \
+          --node-name ${TARGET_NODE} \
+          --gateway-api \
+          --ingress-node ${INGRESS_NODE} \
+          --cmd '${pod_cmd}'"
+
 }
 
 main "$@"
